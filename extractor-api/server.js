@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+puppeteer.use(StealthPlugin());
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -48,8 +50,11 @@ app.get("/api/extract", async (req, res) => {
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
                 "--single-process",
+                "--disable-blink-features=AutomationControlled",
+                "--window-size=1920,1080",
                 `--crash-dumps-dir=${userDataDir}/crashes`,
             ],
+            ignoreDefaultArgs: ["--enable-automation"],
         });
 
         const page = await browser.newPage();
