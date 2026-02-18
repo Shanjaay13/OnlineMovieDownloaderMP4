@@ -26,6 +26,10 @@ export default function Home() {
                 throw new Error(data.error || "Failed to fetch video info");
             }
 
+            if (data.formats.length === 0) {
+                throw new Error("No downloadable formats found for this URL.");
+            }
+
             setVideoInfo(data);
         } catch (err: any) {
             setError(err.message);
@@ -35,10 +39,27 @@ export default function Home() {
     };
 
     const handleDownload = (videoUrl: string, formatId: string) => {
-        window.open(
-            `/api/download?url=${encodeURIComponent(videoUrl)}&itag=${formatId}`,
-            "_blank"
+        // Find the selected format to check if it has a direct URL
+        const format = videoInfo?.formats?.find(
+            (f: any) => f.format_id === formatId
         );
+
+        if (format?.url) {
+            // Generic site: use the direct URL
+            window.open(format.url, "_blank");
+        } else if (videoInfo?.source === "youtube") {
+            // YouTube: use the itag-based download route
+            window.open(
+                `/api/download?url=${encodeURIComponent(videoUrl)}&itag=${formatId}`,
+                "_blank"
+            );
+        } else {
+            // Fallback: try direct URL from download API
+            window.open(
+                `/api/download?direct_url=${encodeURIComponent(format?.url || videoUrl)}`,
+                "_blank"
+            );
+        }
     };
 
     return (
@@ -50,7 +71,7 @@ export default function Home() {
                         Universal Downloader
                     </h1>
                     <p className="text-lg text-slate-400">
-                        Download high-quality videos from your favorite streaming sites.
+                        Download videos from YouTube, streaming sites, and more.
                     </p>
                 </div>
 
@@ -58,7 +79,7 @@ export default function Home() {
                 <div className="flex flex-col sm:flex-row gap-4">
                     <Input
                         type="url"
-                        placeholder="Paste a YouTube URL here..."
+                        placeholder="Paste any video URL here..."
                         value={url}
                         onChange={(e) => setUrl(e.target.value)}
                         className="h-12 bg-slate-900 border-slate-800 text-lg placeholder:text-slate-500 focus-visible:ring-blue-500"

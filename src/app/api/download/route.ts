@@ -5,10 +5,17 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const url = searchParams.get("url");
     const itag = searchParams.get("itag");
+    const directUrl = searchParams.get("direct_url");
 
+    // For generic sites: redirect to the direct URL
+    if (directUrl) {
+        return NextResponse.redirect(directUrl);
+    }
+
+    // For YouTube: use ytdl-core to resolve itag to URL
     if (!url || !itag) {
         return NextResponse.json(
-            { error: "URL and itag are required" },
+            { error: "URL and itag (or direct_url) are required" },
             { status: 400 }
         );
     }
@@ -26,7 +33,6 @@ export async function GET(request: Request) {
             );
         }
 
-        // Redirect to the direct download URL
         return NextResponse.redirect(format.url);
     } catch (error: any) {
         console.error("Download error:", error.message);
