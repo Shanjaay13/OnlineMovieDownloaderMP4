@@ -44,17 +44,23 @@ export default function Home() {
             (f: any) => f.format_id === formatId
         );
 
-        if (format?.url) {
-            // Generic site: use the direct URL
-            window.open(format.url, "_blank");
+        if (format?.ext === "embed" && format?.url) {
+            // Embed sources (noozy.tv, etc.): open via embed proxy page
+            window.open(
+                `/api/embed?url=${encodeURIComponent(format.url)}&title=${encodeURIComponent(videoInfo?.title || "Video")}`,
+                "_blank"
+            );
         } else if (videoInfo?.source === "youtube") {
             // YouTube: use the itag-based download route
             window.open(
                 `/api/download?url=${encodeURIComponent(videoUrl)}&itag=${formatId}`,
                 "_blank"
             );
+        } else if (format?.url) {
+            // Direct video URL (mp4, m3u8, etc.)
+            window.open(format.url, "_blank");
         } else {
-            // Fallback: try direct URL from download API
+            // Fallback
             window.open(
                 `/api/download?direct_url=${encodeURIComponent(format?.url || videoUrl)}`,
                 "_blank"
