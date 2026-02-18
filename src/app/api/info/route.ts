@@ -32,40 +32,34 @@ async function extractNoozyTv(url: string) {
     const urlParts = url.split(".");
     const linkId = urlParts[urlParts.length - 1]; // e.g. "5507374"
 
-    // Extract slug for title
+    // Extract slug and type
     const pathMatch = url.match(/\/(watch-movie|watch-tv)\/([^.]+)/);
+    const isMovie = pathMatch ? pathMatch[1] === "watch-movie" : true;
     const slug = pathMatch ? pathMatch[2] : "Unknown";
+
+    // Extract TMDB ID from the slug (number at end of slug before the dot)
+    const tmdbMatch = slug.match(/-(\d+)$/);
+    const tmdbId = tmdbMatch ? tmdbMatch[1] : "";
+
     const prettyTitle = slug
-        .replace(/-\d+$/, "") // remove trailing ID
+        .replace(/-\d+$/, "") // remove trailing TMDB ID
         .replace(/-/g, " ")
         .replace(/\b\w/g, (c) => c.toUpperCase());
 
-    // Fetch the watch page to get metadata and server list
-    const pageRes = await fetch(url, { headers: FETCH_HEADERS });
-    const pageHtml = await pageRes.text();
-
-    // Extract OG image for thumbnail
-    const ogImageMatch = pageHtml.match(
-        /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i
-    );
-    const thumbnail = ogImageMatch ? ogImageMatch[1] : "";
-
-    // Extract all server link IDs from the page
-    const serverPattern = /data-linkid=["'](\d+)["']/gi;
-    const serverIds: string[] = [];
-    let match;
-    while ((match = serverPattern.exec(pageHtml)) !== null) {
-        if (!serverIds.includes(match[1])) {
-            serverIds.push(match[1]);
-        }
+    // Fetch the watch page to get metadata
+    let thumbnail = "";
+    try {
+        const pageRes = await fetch(url, { headers: FETCH_HEADERS });
+        const pageHtml = await pageRes.text();
+        const ogImageMatch = pageHtml.match(
+            /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i
+        );
+        thumbnail = ogImageMatch ? ogImageMatch[1] : "";
+    } catch {
+        // Continue without thumbnail
     }
 
-    // If no servers found in page, use the linkId from URL
-    if (serverIds.length === 0 && linkId && /^\d+$/.test(linkId)) {
-        serverIds.push(linkId);
-    }
-
-    // Fetch embed URLs from each server
+    // Build formats using alternative TMDB-based providers
     const formats: Array<{
         format_id: string;
         format_note: string;
@@ -75,12 +69,55 @@ async function extractNoozyTv(url: string) {
         url: string;
     }> = [];
 
-    const serverNames = ["UpCloud", "AKCloud", "MegaCloud", "Server 4", "Server 5"];
+    if (tmdbId) {
+        const mediaType = isMovie ? "movie" : "tv";
 
-    for (let i = 0; i < serverIds.length; i++) {
+        // Provider 1: vidsrc.icu - reliable, no referrer check
+        formats.push({
+            format_id: "vidsrc-icu",
+            format_note: "VidSrc Server (Recommended)",
+            ext: "embed",
+            filesize: 0,
+            resolution: "HD / Full HD",
+            url: `https://vidsrc.icu/embed/${mediaType}/${tmdbId}`,
+        });
+
+        // Provider 2: vidsrc.cc
+        formats.push({
+            format_id: "vidsrc-cc",
+            format_note: "VidSrc CC Server",
+            ext: "embed",
+            filesize: 0,
+            resolution: "HD / Full HD",
+            url: `https://vidsrc.cc/v2/embed/${mediaType}/${tmdbId}`,
+        });
+
+        // Provider 3: 2embed
+        formats.push({
+            format_id: "2embed",
+            format_note: "2Embed Server",
+            ext: "embed",
+            filesize: 0,
+            resolution: "HD",
+            url: `https://www.2embed.cc/embed/${tmdbId}`,
+        });
+
+        // Provider 4: multiembed
+        formats.push({
+            format_id: "multiembed",
+            format_note: "MultiEmbed Server",
+            ext: "embed",
+            filesize: 0,
+            resolution: "HD / Full HD",
+            url: `https://multiembed.mov/directstream.php?video_id=${tmdbId}&tmdb=1`,
+        });
+    }
+
+    // Also try noozy.tv's own AJAX sources as extra option
+    if (linkId && /^\d+$/.test(linkId)) {
         try {
             const sourceRes = await fetch(
-                `https://noozy.tv/ajax/episode/sources/${serverIds[i]}`,
+                `https://noozy.tv/ajax/episode/sources/${linkId}`,
                 {
                     headers: {
                         ...FETCH_HEADERS,
@@ -89,13 +126,12 @@ async function extractNoozyTv(url: string) {
                     },
                 }
             );
-
             if (sourceRes.ok) {
                 const data = await sourceRes.json();
                 if (data.link) {
                     formats.push({
-                        format_id: `noozy-${serverIds[i]}`,
-                        format_note: serverNames[i] || `Server ${i + 1}`,
+                        format_id: "noozy-original",
+                        format_note: "Noozy Original Server",
                         ext: "embed",
                         filesize: 0,
                         resolution: "HD",
@@ -104,12 +140,12 @@ async function extractNoozyTv(url: string) {
                 }
             }
         } catch {
-            // Skip failed servers
+            // Skip
         }
     }
 
     return {
-        id: linkId || slug,
+        id: tmdbId || linkId || slug,
         title: prettyTitle,
         thumbnail,
         duration_string: "Full Movie",
