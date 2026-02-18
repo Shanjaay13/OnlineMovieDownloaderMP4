@@ -14,11 +14,8 @@ export async function GET(request: Request) {
         const output = await youtubeDl(url, {
             dumpSingleJson: true,
             noWarnings: true,
-            noCallHome: true,
             preferFreeFormats: true,
-            youtubeSkipDashManifest: true,
-            // We don't want to actually download
-        });
+        }) as any;
 
         // Process formats: prioritize MP4 with audio
         const formats = (output.formats || [])
