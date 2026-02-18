@@ -26,23 +26,24 @@ const FETCH_HEADERS = {
 };
 
 // ====== NOOZY.TV EXTRACTOR ======
+const EXTRACTOR_API = "https://video-extractor-api-o332.onrender.com";
+
 async function extractNoozyTv(url: string) {
     // URL format: https://noozy.tv/watch-movie/slug-{movieId}.{linkId}
-    //          or: https://noozy.tv/watch-tv/slug-{showId}.{linkId}
     const urlParts = url.split(".");
-    const linkId = urlParts[urlParts.length - 1]; // e.g. "5507374"
+    const linkId = urlParts[urlParts.length - 1];
 
     // Extract slug and type
     const pathMatch = url.match(/\/(watch-movie|watch-tv)\/([^.]+)/);
     const isMovie = pathMatch ? pathMatch[1] === "watch-movie" : true;
     const slug = pathMatch ? pathMatch[2] : "Unknown";
 
-    // Extract TMDB ID from the slug (number at end of slug before the dot)
+    // Extract TMDB ID from the slug
     const tmdbMatch = slug.match(/-(\d+)$/);
     const tmdbId = tmdbMatch ? tmdbMatch[1] : "";
 
     const prettyTitle = slug
-        .replace(/-\d+$/, "") // remove trailing TMDB ID
+        .replace(/-\d+$/, "")
         .replace(/-/g, " ")
         .replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -59,7 +60,6 @@ async function extractNoozyTv(url: string) {
         // Continue without thumbnail
     }
 
-    // Build formats using alternative TMDB-based providers
     const formats: Array<{
         format_id: string;
         format_note: string;
@@ -69,20 +69,46 @@ async function extractNoozyTv(url: string) {
         url: string;
     }> = [];
 
-    if (tmdbId) {
+    // Strategy 1: Use the Render Puppeteer API for direct video stream URLs
+    try {
+        const extractRes = await fetch(
+            `${EXTRACTOR_API}/api/extract?url=${encodeURIComponent(url)}`,
+            { signal: AbortSignal.timeout(90000) } // 90 second timeout
+        );
+
+        if (extractRes.ok) {
+            const data = await extractRes.json();
+            if (data.success && data.sources && data.sources.length > 0) {
+                for (let i = 0; i < data.sources.length; i++) {
+                    const source = data.sources[i];
+                    formats.push({
+                        format_id: `stream-${i}`,
+                        format_note: `Direct Stream (${source.quality || "Auto"})`,
+                        ext: source.type === "m3u8" ? "m3u8" : "mp4",
+                        filesize: 0,
+                        resolution: source.quality || "HD",
+                        url: source.url,
+                    });
+                }
+            }
+        }
+    } catch {
+        console.log("[Noozy] Render extractor API unavailable, using fallbacks");
+    }
+
+    // Strategy 2: TMDB-based embed providers as fallback
+    if (formats.length === 0 && tmdbId) {
         const mediaType = isMovie ? "movie" : "tv";
 
-        // Provider 1: vidsrc.icu - reliable, no referrer check
         formats.push({
             format_id: "vidsrc-icu",
-            format_note: "VidSrc Server (Recommended)",
+            format_note: "VidSrc Server",
             ext: "embed",
             filesize: 0,
             resolution: "HD / Full HD",
             url: `https://vidsrc.icu/embed/${mediaType}/${tmdbId}`,
         });
 
-        // Provider 2: vidsrc.cc
         formats.push({
             format_id: "vidsrc-cc",
             format_note: "VidSrc CC Server",
@@ -92,7 +118,6 @@ async function extractNoozyTv(url: string) {
             url: `https://vidsrc.cc/v2/embed/${mediaType}/${tmdbId}`,
         });
 
-        // Provider 3: 2embed
         formats.push({
             format_id: "2embed",
             format_note: "2Embed Server",
@@ -102,7 +127,6 @@ async function extractNoozyTv(url: string) {
             url: `https://www.2embed.cc/embed/${tmdbId}`,
         });
 
-        // Provider 4: multiembed
         formats.push({
             format_id: "multiembed",
             format_note: "MultiEmbed Server",
@@ -111,37 +135,6 @@ async function extractNoozyTv(url: string) {
             resolution: "HD / Full HD",
             url: `https://multiembed.mov/directstream.php?video_id=${tmdbId}&tmdb=1`,
         });
-    }
-
-    // Also try noozy.tv's own AJAX sources as extra option
-    if (linkId && /^\d+$/.test(linkId)) {
-        try {
-            const sourceRes = await fetch(
-                `https://noozy.tv/ajax/episode/sources/${linkId}`,
-                {
-                    headers: {
-                        ...FETCH_HEADERS,
-                        "X-Requested-With": "XMLHttpRequest",
-                        Referer: url,
-                    },
-                }
-            );
-            if (sourceRes.ok) {
-                const data = await sourceRes.json();
-                if (data.link) {
-                    formats.push({
-                        format_id: "noozy-original",
-                        format_note: "Noozy Original Server",
-                        ext: "embed",
-                        filesize: 0,
-                        resolution: "HD",
-                        url: data.link,
-                    });
-                }
-            }
-        } catch {
-            // Skip
-        }
     }
 
     return {
