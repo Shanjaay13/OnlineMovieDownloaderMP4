@@ -5,6 +5,10 @@ function isYouTubeUrl(url: string): boolean {
     return /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/.test(url);
 }
 
+function isNoozyUrl(url: string): boolean {
+    return /noozy\.tv/i.test(url);
+}
+
 function formatDuration(seconds: number): string {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -15,15 +19,110 @@ function formatDuration(seconds: number): string {
     return `${mins}:${String(secs).padStart(2, "0")}`;
 }
 
-// Generic scraper: fetch page HTML and extract video/iframe sources
+const FETCH_HEADERS = {
+    "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+};
+
+// ====== NOOZY.TV EXTRACTOR ======
+async function extractNoozyTv(url: string) {
+    // URL format: https://noozy.tv/watch-movie/slug-{movieId}.{linkId}
+    //          or: https://noozy.tv/watch-tv/slug-{showId}.{linkId}
+    const urlParts = url.split(".");
+    const linkId = urlParts[urlParts.length - 1]; // e.g. "5507374"
+
+    // Extract slug for title
+    const pathMatch = url.match(/\/(watch-movie|watch-tv)\/([^.]+)/);
+    const slug = pathMatch ? pathMatch[2] : "Unknown";
+    const prettyTitle = slug
+        .replace(/-\d+$/, "") // remove trailing ID
+        .replace(/-/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+
+    // Fetch the watch page to get metadata and server list
+    const pageRes = await fetch(url, { headers: FETCH_HEADERS });
+    const pageHtml = await pageRes.text();
+
+    // Extract OG image for thumbnail
+    const ogImageMatch = pageHtml.match(
+        /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i
+    );
+    const thumbnail = ogImageMatch ? ogImageMatch[1] : "";
+
+    // Extract all server link IDs from the page
+    const serverPattern = /data-linkid=["'](\d+)["']/gi;
+    const serverIds: string[] = [];
+    let match;
+    while ((match = serverPattern.exec(pageHtml)) !== null) {
+        if (!serverIds.includes(match[1])) {
+            serverIds.push(match[1]);
+        }
+    }
+
+    // If no servers found in page, use the linkId from URL
+    if (serverIds.length === 0 && linkId && /^\d+$/.test(linkId)) {
+        serverIds.push(linkId);
+    }
+
+    // Fetch embed URLs from each server
+    const formats: Array<{
+        format_id: string;
+        format_note: string;
+        ext: string;
+        filesize: number;
+        resolution: string;
+        url: string;
+    }> = [];
+
+    const serverNames = ["UpCloud", "AKCloud", "MegaCloud", "Server 4", "Server 5"];
+
+    for (let i = 0; i < serverIds.length; i++) {
+        try {
+            const sourceRes = await fetch(
+                `https://noozy.tv/ajax/episode/sources/${serverIds[i]}`,
+                {
+                    headers: {
+                        ...FETCH_HEADERS,
+                        "X-Requested-With": "XMLHttpRequest",
+                        Referer: url,
+                    },
+                }
+            );
+
+            if (sourceRes.ok) {
+                const data = await sourceRes.json();
+                if (data.link) {
+                    formats.push({
+                        format_id: `noozy-${serverIds[i]}`,
+                        format_note: serverNames[i] || `Server ${i + 1}`,
+                        ext: "embed",
+                        filesize: 0,
+                        resolution: "HD",
+                        url: data.link,
+                    });
+                }
+            }
+        } catch {
+            // Skip failed servers
+        }
+    }
+
+    return {
+        id: linkId || slug,
+        title: prettyTitle,
+        thumbnail,
+        duration_string: "Full Movie",
+        formats,
+        webpage_url: url,
+        source: "noozy",
+    };
+}
+
+// ====== GENERIC SCRAPER ======
 async function scrapeGenericSite(url: string) {
     const res = await fetch(url, {
-        headers: {
-            "User-Agent":
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            Referer: url,
-        },
+        headers: { ...FETCH_HEADERS, Referer: url },
     });
 
     if (!res.ok) {
@@ -32,169 +131,99 @@ async function scrapeGenericSite(url: string) {
 
     const html = await res.text();
 
-    // Extract page title
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
     const title = titleMatch ? titleMatch[1].trim() : "Unknown Video";
 
-    // Extract OG image for thumbnail
     const ogImageMatch = html.match(
         /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i
     );
     const thumbnail = ogImageMatch ? ogImageMatch[1] : "";
 
-    // Strategy 1: Find direct video sources (mp4, webm, etc.)
+    // Find direct video sources
     const videoSrcPatterns = [
-        // <video src="...">
         /<video[^>]*\ssrc=["']([^"']+\.(?:mp4|webm|mkv|m3u8)[^"']*)["']/gi,
-        // <source src="...">
         /<source[^>]*\ssrc=["']([^"']+\.(?:mp4|webm|mkv|m3u8)[^"']*)["']/gi,
-        // JavaScript variables with video URLs
-        /["']([^"']*\.(?:mp4|webm|mkv)(?:\?[^"']*)?)["']/gi,
-        // m3u8 URLs in JavaScript
         /["'](https?:\/\/[^"']*\.m3u8(?:\?[^"']*)?)["']/gi,
+        /file:\s*["'](https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/gi,
+        /source:\s*["'](https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/gi,
     ];
 
     const directUrls = new Set<string>();
     for (const pattern of videoSrcPatterns) {
-        let match;
-        while ((match = pattern.exec(html)) !== null) {
-            const foundUrl = match[1];
-            // Filter out obvious non-video URLs (icons, logos, etc.)
+        let m;
+        while ((m = pattern.exec(html)) !== null) {
             if (
-                foundUrl.startsWith("http") &&
-                !foundUrl.includes("logo") &&
-                !foundUrl.includes("favicon") &&
-                !foundUrl.includes("icon") &&
-                foundUrl.length < 500
+                m[1].startsWith("http") &&
+                !m[1].includes("logo") &&
+                !m[1].includes("favicon") &&
+                m[1].length < 500
             ) {
-                directUrls.add(foundUrl);
+                directUrls.add(m[1]);
             }
         }
     }
 
-    // Strategy 2: Find iframe embeds (common in streaming sites)
+    // Find iframe embeds
     const iframePattern = /<iframe[^>]*\ssrc=["']([^"']+)["'][^>]*>/gi;
     const embedUrls: string[] = [];
     let iframeMatch;
     while ((iframeMatch = iframePattern.exec(html)) !== null) {
-        const iframeSrc = iframeMatch[1];
-        // Filter to likely video embeds
+        const src = iframeMatch[1];
         if (
-            iframeSrc.includes("embed") ||
-            iframeSrc.includes("player") ||
-            iframeSrc.includes("stream") ||
-            iframeSrc.includes("vidcloud") ||
-            iframeSrc.includes("rabbitstream") ||
-            iframeSrc.includes("dokicloud") ||
-            iframeSrc.includes("megacloud") ||
-            iframeSrc.includes("upcloud") ||
-            iframeSrc.includes("vidsrc")
+            src.includes("embed") ||
+            src.includes("player") ||
+            src.includes("stream") ||
+            src.includes("vidsrc")
         ) {
-            embedUrls.push(iframeSrc);
+            embedUrls.push(src);
         }
     }
 
-    // Strategy 3: For noozy.tv specifically, look for data-id attributes on server buttons
-    const serverPattern =
-        /data-id=["'](?:watch-)?(\d+)["'][^>]*>.*?<\/a>/gis;
-    const serverIdPattern =
-        /class=["'][^"']*link-item[^"']*["'][^>]*data-id=["'](\d+)["']/gi;
-    const serverIds: string[] = [];
-    let serverMatch;
-    while ((serverMatch = serverIdPattern.exec(html)) !== null) {
-        serverIds.push(serverMatch[1]);
-    }
-
-    // If we found server IDs (noozy.tv pattern), try to get sources via AJAX
-    if (serverIds.length > 0) {
-        const baseUrl = new URL(url);
-        for (const serverId of serverIds) {
-            try {
-                const ajaxRes = await fetch(
-                    `${baseUrl.origin}/ajax/sources/${serverId}`,
-                    {
-                        headers: {
-                            "User-Agent":
-                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                            "X-Requested-With": "XMLHttpRequest",
-                            Referer: url,
-                        },
-                    }
-                );
-                if (ajaxRes.ok) {
-                    const data = await ajaxRes.json();
-                    if (data.link) {
-                        embedUrls.push(data.link);
-                    }
-                }
-            } catch {
-                // Ignore AJAX failures
-            }
-        }
-    }
-
-    // If embed URLs found, try to follow them and extract video sources
+    // Try to follow embeds and extract video URLs
     for (const embedUrl of embedUrls.slice(0, 3)) {
-        // Limit to 3 to avoid timeout
         try {
             const embedRes = await fetch(embedUrl, {
-                headers: {
-                    "User-Agent":
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    Referer: url,
-                },
+                headers: { ...FETCH_HEADERS, Referer: url },
             });
             if (embedRes.ok) {
                 const embedHtml = await embedRes.text();
-                // Look for video URLs in the embed page
-                const embedVideoPatterns = [
+                const embedPatterns = [
                     /["'](https?:\/\/[^"']*\.m3u8[^"']*)["']/gi,
                     /["'](https?:\/\/[^"']*\.mp4[^"']*)["']/gi,
-                    /file:\s*["'](https?:\/\/[^"']+)["']/gi,
-                    /source:\s*["'](https?:\/\/[^"']+)["']/gi,
-                    /src:\s*["'](https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/gi,
                 ];
-                for (const ep of embedVideoPatterns) {
+                for (const ep of embedPatterns) {
                     let em;
                     while ((em = ep.exec(embedHtml)) !== null) {
-                        if (em[1].startsWith("http")) {
-                            directUrls.add(em[1]);
-                        }
+                        if (em[1].startsWith("http")) directUrls.add(em[1]);
                     }
                 }
             }
         } catch {
-            // Ignore embed fetch failures
+            // Ignore
         }
     }
 
-    // Build formats from found URLs
     const formats = Array.from(directUrls).map((videoUrl, index) => {
-        const ext = videoUrl.includes(".m3u8")
-            ? "m3u8 (HLS)"
-            : videoUrl.includes(".webm")
-                ? "webm"
-                : "mp4";
+        const ext = videoUrl.includes(".m3u8") ? "m3u8" : videoUrl.includes(".webm") ? "webm" : "mp4";
         return {
             format_id: `generic-${index}`,
             format_note: `Source ${index + 1}`,
             ext,
             filesize: 0,
-            resolution: ext === "m3u8 (HLS)" ? "Adaptive" : "Unknown",
+            resolution: ext === "m3u8" ? "Adaptive" : "Unknown",
             url: videoUrl,
         };
     });
 
-    // If we still only have embed URLs (no direct video), present them as options
     if (formats.length === 0 && embedUrls.length > 0) {
-        embedUrls.forEach((embedUrl, index) => {
+        embedUrls.forEach((eUrl, index) => {
             formats.push({
                 format_id: `embed-${index}`,
                 format_note: `Server ${index + 1}`,
                 ext: "embed",
                 filesize: 0,
                 resolution: "Embedded Player",
-                url: embedUrl,
+                url: eUrl,
             });
         });
     }
@@ -210,6 +239,7 @@ async function scrapeGenericSite(url: string) {
     };
 }
 
+// ====== MAIN HANDLER ======
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const url = searchParams.get("url");
@@ -220,16 +250,13 @@ export async function GET(request: Request) {
 
     try {
         if (isYouTubeUrl(url)) {
-            // YouTube handler
             const info = await ytdl.getInfo(url);
             const videoDetails = info.videoDetails;
 
             const formats = info.formats
-                .filter(
-                    (f) => f.hasVideo && f.hasAudio && f.container === "mp4"
-                )
-                .sort((a, b) => (b.height || 0) - (a.height || 0))
-                .map((f) => ({
+                .filter((f: any) => f.hasVideo && f.hasAudio && f.container === "mp4")
+                .sort((a: any, b: any) => (b.height || 0) - (a.height || 0))
+                .map((f: any) => ({
                     format_id: f.itag.toString(),
                     format_note: f.qualityLabel || f.quality || "unknown",
                     ext: f.container || "mp4",
@@ -239,7 +266,7 @@ export async function GET(request: Request) {
                 }));
 
             const seen = new Set<string>();
-            const uniqueFormats = formats.filter((f) => {
+            const uniqueFormats = formats.filter((f: any) => {
                 if (seen.has(f.resolution)) return false;
                 seen.add(f.resolution);
                 return true;
@@ -255,15 +282,25 @@ export async function GET(request: Request) {
                 webpage_url: videoDetails.video_url,
                 source: "youtube",
             });
+        } else if (isNoozyUrl(url)) {
+            const result = await extractNoozyTv(url);
+
+            if (result.formats.length === 0) {
+                return NextResponse.json(
+                    { error: "No servers found for this video on noozy.tv. The video might have been removed." },
+                    { status: 404 }
+                );
+            }
+
+            return NextResponse.json(result);
         } else {
-            // Generic site scraper
             const result = await scrapeGenericSite(url);
 
             if (result.formats.length === 0) {
                 return NextResponse.json(
                     {
                         error:
-                            "No downloadable video sources found on this page. The video might be loaded dynamically via JavaScript encryption that cannot be extracted server-side.",
+                            "No downloadable video sources found on this page. The video might be loaded dynamically via JavaScript encryption.",
                     },
                     { status: 404 }
                 );
