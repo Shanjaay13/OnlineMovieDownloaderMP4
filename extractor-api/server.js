@@ -2,6 +2,8 @@ const express = require("express");
 const cors = require("cors");
 const puppeteer = require("puppeteer");
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -155,13 +157,13 @@ app.get("/api/extract", async (req, res) => {
 
         // Wait a bit for any async source loading
         console.log(`[Extract] Waiting for video sources to load...`);
-        await page.waitForTimeout(5000);
+        await delay(5000);
 
         // Try clicking play button if it exists
         try {
             await page.click(".jw-icon-display, .play-button, .vjs-big-play-button, [aria-label='Play']");
             console.log("[Extract] Clicked play button");
-            await page.waitForTimeout(5000);
+            await delay(5000);
         } catch {
             // No play button found, video might autoplay
         }
@@ -203,7 +205,7 @@ app.get("/api/extract", async (req, res) => {
         }
 
         // Wait a bit more for any remaining requests
-        await page.waitForTimeout(3000);
+        await delay(3000);
 
         await browser.close();
         browser = null;
