@@ -1,4 +1,3 @@
-import Image from "next/image";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
@@ -47,12 +46,11 @@ export function VideoCard({ info, onDownload, loading }: VideoCardProps) {
     return (
         <Card className="w-full max-w-md mx-auto overflow-hidden bg-white/5 backdrop-blur-sm border-white/10">
             <div className="relative aspect-video w-full">
-                <Image
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
                     src={info.thumbnail}
                     alt={info.title}
-                    fill
-                    className="object-cover"
-                    unoptimized={true} // Use unoptimized for external images to avoid limits initially
+                    className="w-full h-full object-cover"
                 />
                 <div className="absolute bottom-2 right-2 bg-black/80 text-white text-xs px-2 py-1 rounded">
                     {info.duration_string}

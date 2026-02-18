@@ -35,13 +35,16 @@ export default function Home() {
     };
 
     const handleDownload = (videoUrl: string, formatId: string) => {
-        // Open in new tab to trigger download
-        window.open(`/api/download?url=${encodeURIComponent(videoUrl)}&format_id=${formatId}`, '_blank');
+        window.open(
+            `/api/download?url=${encodeURIComponent(videoUrl)}&itag=${formatId}`,
+            "_blank"
+        );
     };
 
     return (
         <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4 selection:bg-blue-500/30">
             <div className="w-full max-w-2xl space-y-8 text-center">
+                {/* Hero */}
                 <div className="space-y-4">
                     <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent pb-2">
                         Universal Downloader
@@ -51,10 +54,11 @@ export default function Home() {
                     </p>
                 </div>
 
+                {/* Input */}
                 <div className="flex flex-col sm:flex-row gap-4">
                     <Input
                         type="url"
-                        placeholder="Paste video URL here..."
+                        placeholder="Paste a YouTube URL here..."
                         value={url}
                         onChange={(e) => setUrl(e.target.value)}
                         className="h-12 bg-slate-900 border-slate-800 text-lg placeholder:text-slate-500 focus-visible:ring-blue-500"
@@ -70,12 +74,14 @@ export default function Home() {
                     </Button>
                 </div>
 
+                {/* Error */}
                 {error && (
                     <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400">
                         {error}
                     </div>
                 )}
 
+                {/* Video Card */}
                 {videoInfo && (
                     <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
                         <VideoCard info={videoInfo} onDownload={handleDownload} />
@@ -84,7 +90,7 @@ export default function Home() {
             </div>
 
             <footer className="mt-16 text-slate-500 text-sm">
-                <p>Supported by yt-dlp. For educational purposes only.</p>
+                <p>For educational purposes only.</p>
             </footer>
         </main>
     );
